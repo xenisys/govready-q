@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from django.conf import settings
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -33,175 +35,105 @@ class Jinja2Environment(SandboxedEnvironment):
         # Call default operator logic.
         return SandboxedEnvironment.call_binop(self, context, operator, left, right)
 
-def walk_module_questions(module, callback):
-    # Walks the questions in depth-first order following the dependency
-    # tree connecting questions. If a question is a dependency of multiple
-    # questions, it is walked only once.
+
+def evaluate_module_state(current_answers, data_cache):
+    # Compute the answers of all of the questions in a module by
+    # evaluating all of the impute conditions. If a question has
+    # no impute condition (with a satisfied condition), the
+    # question's answer is the user-provided value passed in
+    # current_answers.
     #
-    # callback is called for each question in the module with these arguments:
-    #
-    # 1) A ModuleQuestion, after the callback has been called for all
-    #    ModuleQuestions that the question depends on.
-    # 2) A dictionary that has been merged from the return value of all
-    #    of the callback calls on its dependencies.
-    # 3) A set of ModuleQuestion instances that this question depends on,
-    #    so that the callback doesn't have to compute it (again) itself.
+    # Also compute a list of questions that the user may answer
+    # now (in "can_answer") and a list of questions that are not
+    # yet answered (in "unanswered"), which includes questions
+    # whose required dependencies are not yet answered. Also track
+    # which questions' answers were imputed.
 
-    # Remember each question that is processed so we only process each
-    # question at most once. Cache the state that it gives.
-    processed_questions = { }
+    # Computed answers, a list of tuples (
+    #   question: a ModuleQuestion instance,
+    #   is_answered: a boolean, true if the question has an answer (either by the user or imputed),
+    #   answerobj: a TaskAnswerHistory instance or None, the user answer object if the user answered the question,
+    #   value: any data type, the Pythonic answer value (but not used if the second element of this tuple is False
+    # ).
+    # The tuple tells you whether the question is:
+    # * imputed: is_answered is True but answerobj is None
+    # * skipped: answerobj is not None and value is None and (q.spec["type"] != "interstitial")
 
-    # Pre-load all of the dependencies between questions in this module
-    # and get the questions that are not depended on by any question,
-    # which is where the dependency chains start.
-    dependencies, root_questions = get_all_question_dependencies(module)
-
-    # Local function that processes a single question.
-    def walk_question(q, stack):
-        # If we've seen this question already as a dependency of another
-        # question, then return its state dict from last time.
-        if q.key in processed_questions:
-            return processed_questions[q.key]
-        
-        # Prevent infinite recursion.
-        if q.key in stack:
-            raise ValueError("Cyclical dependency in questions: " + "->".join(stack + [q.key]))
-
-        # Execute recursively on the questions it depends on,
-        # in module definition order rather than in a random
-        # order.
-        state = { }
-        deps = list(dependencies[q])
-        deps.sort(key = lambda q : q.definition_order)
-        for qq in deps:
-            state.update(walk_question(qq, stack+[q.key]))
-
-        # Run the callback and get its state.
-        state = callback(q, state, dependencies[q])
-
-        # Remember the state in case we encounter it later.
-        processed_questions[q.key] = dict(state) # clone
-
-        # Return the state to the caller.
-        return state
-
-    # Walk the dependency root questions in document order.
-    root_questions = list(root_questions)
-    root_questions.sort(key = lambda q : q.definition_order)
-    for q in root_questions:
-        walk_question(q, [])
-
-
-def evaluate_module_state(current_answers, parent_context=None):
-    # Compute the next question to ask the user, given the user's
-    # answers to questions so far, and all imputed answers up to
-    # that point.
-    #
-    # To figure this out, we walk the dependency tree of questions
-    # until we arrive at questions that have no unanswered dependencies.
-    # Such questions can be put forth to the user.
-
-    # Build a list of ModuleQuestions that the user may answer now.
-    can_answer = set()
-
-    # Build a list of ModuleQuestions that still need an answer,
-    # including can_answer and unanswered ModuleQuestions that
-    # have dependencies that are unanswered and need to be answered
-    # first before the questions in this list can be answered.
-    unanswered = set()
-
-    # Build a new array of answer values.
-    from collections import OrderedDict
     answertuples = OrderedDict()
 
-    # Build a list of questions whose answers were imputed.
+    can_answer = []
+    unanswered = []
     was_imputed = set()
 
-    # Create some reusable context for evaluating impute conditions --- really only
-    # so that we can pass down project and organization values. Everything else is
-    # cleared from the context's cache for each question because each question sees
-    # a different set of dependencies.
-    impute_context_parent = TemplateContext(
-        ModuleAnswers(current_answers.module, current_answers.task, {}), lambda _0, _1, _2, _3, value : str(value), # escapefunc
-        parent_context=parent_context)
+    # Pre-load all of the dependencies between questions in this module.
+    dependencies, _ = get_all_question_dependencies(current_answers.module)
 
-    # Visitor function.
-    def walker(q, state, deps):
-        # If any of the dependencies don't have answers yet, then this question
-        # cannot be processed yet.
-        for qq in deps:
-            if qq.key not in state:
-                unanswered.add(q)
-                answertuples[q.key] = (q, False, None, None)
-                return { }
+    # Set rendering options that affect how impute conditions (and sometimes
+    # imput values) are evaluated.
+    render_options = TemplateRenderingOptions()
+    render_options.escapefunc = lambda _0, _1, _2, _3, value : str(value)
 
-        # Can this question's answer be imputed from answers that
-        # it depends on? If the user answered this question (during
-        # a state in which it wasn't imputed, but now it is), the
-        # user's answer is overridden with the imputed value for
-        # consistency with the Module's logic.
-        
-        # Create an evaluation context for evaluating impute conditions
-        # that only sees the answers of this question's dependencies,
-        # which are in state because we return the answers from this
-        # method and they are collected as the walk continues up the
-        # dependency tree. 
-        impute_context = TemplateContext(
-            ModuleAnswers(current_answers.module, current_answers.task, state),
-            impute_context_parent.escapefunc, parent_context=impute_context_parent, root=True)
+    # Proceed through the questions in order.
+    for q in current_answers.module.questions.order_by('definition_order'):
+        # Add a default answertuple for this question marking it as
+        # unanswered (and therefore there is no user answer or answer
+        # value).
+        answertuples[q.key] = (q, False, None, None)
 
-        v = run_impute_conditions(q.spec.get("impute", []), impute_context)
-        if v:
-            # An impute condition matched. Unwrap to get the value.
-            answerobj = None
-            v = v[0]
-            was_imputed.add(q.key)
-
-        elif q.key in current_answers.as_dict():
-            # The user has provided an answer to this question.
-            answerobj = current_answers.get(q.key)
-            v = current_answers.as_dict()[q.key]
-
-        elif current_answers.module.spec.get("type") == "project" and q.key == "_introduction":
-            # Projects have an introduction but it isn't displayed as a question.
-            # It's not explicitly answered, but treat it as answered so that questions
-            # that implicitly depend on it can be evaluated.
-            # TODO: Is this still necessary?
-            answerobj = None
-            v = None
+        # If any dependency of this quesiton does not yet have an
+        # answer, then this question cannot have an answer and cannot
+        # be answered.
+        for d in dependencies[q]:
+            if d.key not in answertuples or not answertuples[d.key][1]:
+                # A dependency was not yet answered. Mark this question
+                # as unanswered and *dont* add it to the can_answer list
+                # because it cannot yet be answered.
+                #
+                # (d.key would be missing from answertuples just when this
+                # question has a dependency that is *after* the current question,
+                # which is invalid, but we don't wait to raise exceptions here
+                # b/c the error should be caught during authoring and should
+                # not disturb an end-user.)
+                unanswered.append(q)
+                break
 
         else:
-            # This question does not have an answer yet. We don't set
-            # anything in the state that we return, which flags that
-            # the question is not answered.
-            #
-            # But we can remember that this question *can* be answered
-            # by the user, and that it's not answered yet.
-            can_answer.add(q)
-            unanswered.add(q)
-            answertuples[q.key] = (q, False, None, None)
-            return state
+            # All dependencies have an answer. Try to impute the answer
+            # to this question. Create a TemplateContext in which the
+            # Jinja2 impute conditions (and some values) are evaluated
+            # in. Give it the answers that have been computed for this
+            # module so far --- i.e. allow it to access the answer of
+            # any question defined before it but not after it.
+            answers_so_far = ModuleAnswers(current_answers.module, current_answers.task, answertuples)
+            impute_context = TemplateContext(
+                answers_so_far,
+                render_options,
+                data_cache)
+            imputed_answer = run_impute_conditions(q.spec.get("impute", []), impute_context)
+            if imputed_answer:
+                # An impute condition matched. Unwrap to get the value.
+                # Add an answer tuple indicating it is answered but
+                # not by the user.
+                imputed_answer = imputed_answer[0]
+                answertuples[q.key] = (q, True, None, imputed_answer)
+                was_imputed.add(q.key)
+                continue
 
-        # Update the state that's passed to questions that depend on this
-        # and also the global state of all answered questions.
-        state[q.key] = (q, True, answerobj, v)
-        answertuples[q.key] = (q, True, answerobj, v)
-        return state
+            # No impute condition is satisfied, so use a user-provided
+            # answer, if any.
+            if q.key in current_answers.as_dict():
+                # The user has provided an answer to this question.
+                # Mark the question as answered with the user's answer object.
+                answer_obj = current_answers.get(q.key)
+                answer_value = current_answers.as_dict()[q.key]
+                answertuples[q.key] = (q, True, answer_obj, answer_value)
+                continue
 
-    # Walk the dependency tree.
-    walk_module_questions(current_answers.module, walker)
-
-    # There may be multiple routes through the tree of questions,
-    # so we'll prefer the question that is defined first in the spec.
-    can_answer = sorted(can_answer, key = lambda q : q.definition_order)
-
-    # The list of unanswered questions should be in the same order as
-    # can_answer so that as the user goes through the questions they
-    # are following the same order as the list of upcoming questions.
-    # Ideally we'd form both can_answer and unanswered in the same way
-    # in the right order without needing to sort later, but until then
-    # we'll just sort both.
-    unanswered = sorted(unanswered, key = lambda q : q.definition_order)
+            # There was no user-provided answer, so this question can
+            # be answered.
+            can_answer.append(q)
+            unanswered.append(q)
+            continue
 
     # Create a new ModuleAnswers object that holds the user answers,
     # imputed answers (which override user answers), and next-question
@@ -235,7 +167,9 @@ def get_question_context(answers, question):
             if self.answer_value is None:
                 return "<i>skipped</i>"
             if not hasattr(LazyRenderedAnswer, 'tc'):
-                LazyRenderedAnswer.tc = TemplateContext(answers, HtmlAnswerRenderer(show_metadata=False))
+                class RO(TemplateRenderingOptions):
+                    escapefunc = HtmlAnswerRenderer(show_metadata=False)
+                LazyRenderedAnswer.tc = TemplateContext(answers, RO(), TemplateEvaluationDataCache())
             return RenderedAnswer(answers.task, self.q, self.is_answered, self.answer_obj, self.answer_value, LazyRenderedAnswer.tc).__html__()
 
     answers.as_dict() # force lazy-load
@@ -269,7 +203,8 @@ def get_question_context(answers, question):
 
 
 def render_content(content, answers, output_format, source, additional_context={},
-    demote_headings=True, show_answer_metadata=False, use_data_urls=False, is_computing_title=False):
+    demote_headings=True, show_answer_metadata=False, use_data_urls=False, is_computing_title_for=None,
+    data_cache=None):
 
     # Renders content (which is a dict with keys "format" and "template")
     # into the requested output format, using the ModuleAnswers in answers
@@ -409,8 +344,6 @@ def render_content(content, answers, output_format, source, additional_context={
         # dict keys) with what we get by calling render_content recursively
         # on the string value, assuming it is a template of plain-text type.
 
-        from collections import OrderedDict
-
         def walk(value, path):
             if isinstance(value, str):
                 return render_content(
@@ -422,6 +355,7 @@ def render_content(content, answers, output_format, source, additional_context={
                     output_format,
                     source + " " + "->".join(path),
                     additional_context,
+                    data_cache=data_cache,
                 )
             elif isinstance(value, list):
                 return [walk(i, path+[str(i)]) for i in value]
@@ -536,12 +470,13 @@ def render_content(content, answers, output_format, source, additional_context={
             # context.update will immediately load all top-level values, which
             # unfortuntately might throw an error if something goes wrong
             if answers:
-                tc = TemplateContext(answers, escapefunc,
-                    root=True,
-                    errorfunc=errorfunc,
-                    source=source,
-                    show_answer_metadata=show_answer_metadata,
-                    is_computing_title=is_computing_title)
+                render_options = TemplateRenderingOptions()
+                render_options.escapefunc = escapefunc
+                render_options.errorfunc = errorfunc
+                render_options.is_computing_title_for = is_computing_title_for
+                render_options.show_answer_metadata = show_answer_metadata
+                render_options.source = source
+                tc = TemplateContext(answers, render_options, data_cache or TemplateEvaluationDataCache())
                 context.update(tc)
 
             # Define undefined variables. Jinja2 will normally raise an exception
@@ -923,10 +858,12 @@ class ModuleAnswers(object):
             self.answers_dict = { q.key: value for q, is_ans, ansobj, value in self.answertuples.values() if is_ans }
         return self.answers_dict
 
-    def with_extended_info(self, parent_context=None):
+    def with_extended_info(self, data_cache=None):
         # Return a new ModuleAnswers instance that has imputed values added
         # and information about the next question(s) and unanswered questions.
-        return evaluate_module_state(self, parent_context=parent_context)
+        if data_cache is None:
+            data_cache = TemplateEvaluationDataCache()
+        return evaluate_module_state(self, data_cache)
 
     def get(self, question_key):
         return self.answertuples[question_key][2]
@@ -941,7 +878,9 @@ class ModuleAnswers(object):
         #   * question is a ModuleQuestion instance
         #   * answerobj is a TaskAnswerHistory instance (e.g. holding user and review state), or None if the answer was skipped or imputed
         #   * answerhtml is a str of rendered HTML
-        tc = TemplateContext(self, HtmlAnswerRenderer(show_metadata=show_metadata))
+        render_options = TemplateRenderingOptions()
+        render_options.escapefunc = HtmlAnswerRenderer(show_metadata=show_metadata)
+        tc = TemplateContext(self, render_options, TemplateEvaluationDataCache())
         for q, is_answered, a, value in self.answertuples.values():
             if not is_answered and not show_unanswered: continue # skip questions that have no answers
             if not a and not show_imputed: continue # skip imputed answers
@@ -975,7 +914,7 @@ class ModuleAnswers(object):
 
             yield (q, a, value_display)
 
-    def render_output(self, use_data_urls=False):
+    def render_output(self, use_data_urls=False, data_cache=None):
         # Now that all questions have been answered, generate this
         # module's output. The output is a set of documents. The
         # documents are lazy-rendered because not all of them may
@@ -1021,7 +960,7 @@ class ModuleAnswers(object):
                         )
                         def do_render():
                             try:
-                                return render_content(self.document, self.module_answers, key, doc_name, show_answer_metadata=True, use_data_urls=use_data_urls)
+                                return render_content(self.document, self.module_answers, key, doc_name, show_answer_metadata=True, use_data_urls=use_data_urls, data_cache=data_cache)
                             except Exception as e:
                                 # Put errors into the output. Errors should not occur if the
                                 # template is designed correctly.
@@ -1063,72 +1002,136 @@ class UndefinedReference:
     def __getitem__(self, item):
         return UndefinedReference(item, self.errorfunc, self.path+[self.varname])
 
+
+# The TemplateRenderingOptions class holds options for how to render
+# module answers during template rendering (e.g. question prompts,
+# output documents) and Jinja2 expression evaluation (e.g. impute
+# conditions).
+class TemplateRenderingOptions:
+    # Replace the escapefunc to control how answer values are inserted
+    # into template output when they appear in "{{variable}}" tokens
+    # in templates.
+    @staticmethod
+    def escapefunc(question, task, isanswered, answerobj, value):
+        return str(value)
+
+    # Replace the errorfunc to control how error messages are displayed
+    # in rendered templates, such as from accessing undefined variables
+    # when a template has been authored incorrectly. If not set, errors
+    # are raised.
+    errorfunc = None
+    # Example method:
+    #@staticmethod
+    #def errorfunc(message, short_message, long_message, **format_vars):
+    #    # Wrap in jinja2.Markup to prevent auto-escaping.
+    #    return jinja2.Markup("<" + message.format(**format_vars) + ">")
+
+    # True if answers substituted into the template should be wrapped
+    # in pop-ups that show the answer's metadata. This is used when
+    # rendering output documents within templates via the {{output_documents}}
+    # context variable.
+    show_answer_metadata = False
+
+    # If this evaluation context is for computing the title of a Task,
+    # this holds the Task instance. When set, the title of the Task
+    # is no longer available in template context variables in order to
+    # avoid infinite recursion.
+    is_computing_title_for = False
+
+    # 'source' is a list of strings that give a stack-trace-like context
+    # for what is being evaluated, for error messages. The list goes from
+    # most general to most specific. (Note: Be careful not to modify this
+    # list since the default list instance is shared across every new
+    # TemplateRenderingOptions instance.)
+    source = []
+
+
+# The TemplateEvaluationDataCache class provides a cached layer around all
+# database data that is accessed during Jinja2 template rendering and
+# expression evaluation. Since templates are evaluated with recursive calls,
+# this data structure ensures that we only request a data object once when
+# rendering a template or evaluating an expression.
+class TemplateEvaluationDataCache:
+    def __init__(self):
+        self.module_questions_cache = { }
+        self.task_info_cache = { }
+        self.task_answers = { }
+        self.recursion_checker = set()
+
+    def get_module_question_by_key(self, module, key):
+        return self.get_module_questions(module).get(key)
+
+    def get_module_questions(self, module):
+        if module not in self.module_questions_cache:
+            # Fill cache.
+            self.module_questions_cache[module] = OrderedDict([
+                (q.key, q)
+                for q in module.questions.order_by('definition_order')
+            ])
+        return self.module_questions_cache[module]
+
+    def get_task_info(self, task):
+        if task not in self.task_info_cache:
+            self.task_info_cache[task] = {
+                "title": task.compute_title(self),
+                "url": task.get_absolute_url(),
+            }
+        return self.task_info_cache[task]
+
+    def get_task_answers(self, task):
+        if task not in self.task_answers:
+            if task in self.recursion_checker:
+                raise Exception("Cannot access task answers this way.")
+            self.recursion_checker.add(task)
+            try:
+                self.task_answers[task] = task.get_answers().with_extended_info(self)
+            finally:
+                self.recursion_checker.remove(task)
+        return self.task_answers[task]
+
+# The TemplateContext is a Mapping instance that is passed to Jinja2's
+# template rendering method to provide template context variables, e.g.
+# variables in "{{variable}}" and in expressions like "{% if variable %}".
+# The mapping is populated dynamically.
 from collections.abc import Mapping
 class TemplateContext(Mapping):
-    """A Jinja2 execution context that wraps the Pythonic answers to questions
-       of a ModuleAnswers instance in RenderedAnswer instances that provide
-       template and expression functionality like the '.' accessor to get to
-       the answers of a sub-task."""
-
-    def __init__(self, module_answers, escapefunc, parent_context=None, root=False, errorfunc=None, source=None, show_answer_metadata=None, is_computing_title=False):
+    def __init__(self, module_answers, render_options, data_cache):
         self.module_answers = module_answers
-        self.escapefunc = escapefunc
-        self.root = root
-        self.errorfunc = parent_context.errorfunc if parent_context else errorfunc
-        self.source = (parent_context.source if parent_context else []) + ([source] if source else [])
-        self.show_answer_metadata = parent_context.show_answer_metadata if parent_context else (show_answer_metadata or False)
-        self.is_computing_title = parent_context.is_computing_title if parent_context else is_computing_title
-        self._cache = { }
-        self.parent_context = parent_context
+        self.render_options = render_options
+        self.data_cache = data_cache
 
     def __str__(self):
         return "<TemplateContext for %s>" % (self.module_answers)
 
     def __getitem__(self, item):
-        # Cache every context variable's value, since some items are expensive.
-        if item not in self._cache:
-            self._cache[item] = self.getitem(item)
-        return self._cache[item]
-
-    def _execute_lazy_module_answers(self):
-        if self.module_answers is None:
-            # This is a TemplateContext for an unanswered question with an unknown
-            # module type. We treat this as if it were a Task that had no questions but
-            # also is not finished.
-            self._module_questions = { }
-            return
-        if callable(self.module_answers):
-            self.module_answers = self.module_answers()
-        self._module_questions = { q.key: q for q in self.module_answers.get_questions() }
-
-    def getitem(self, item):
-        self._execute_lazy_module_answers()
-
         # If 'item' matches a question ID, wrap the internal Pythonic/JSON-able value
         # with a RenderedAnswer instance which take care of converting raw data values
         # into how they are rendered in templates (escaping, iteration, property accessors)
         # and evaluated in expressions.
-        question = self._module_questions.get(item)
-        if question:
-            # The question might or might not be answered. If not, its value is None.
-            self.module_answers.as_dict() # trigger lazy-loading
-            _, is_answered, answerobj, answervalue = self.module_answers.answertuples.get(item, (None, None, None, None))
-            return RenderedAnswer(self.module_answers.task, question, is_answered, answerobj, answervalue, self)
+        if self.module_answers is not None:
+            question = self.data_cache.get_module_question_by_key(self.module_answers.module, item)
+            if question:
+                # The question might or might not be answered. If not, its value is None.
+                # If it is, get the answer.
+                if self.module_answers.task:
+                    answertuples = self.data_cache.get_task_answers(self.module_answers.task).answertuples
+                    _, is_answered, answerobj, answervalue = answertuples.get(item, (None, None, None, None))
+                else:
+                    is_answered = False
+                    answerobj = None
+                    answervalue = None
+                return RenderedAnswer(self.module_answers.task, question, is_answered, answerobj, answervalue, self)
 
         # The context also provides the project and organization that the Task belongs to,
         # and other task attributes, assuming the keys are not overridden by question IDs.
         if self.module_answers and self.module_answers.task:
-            if item == "title" and (not self.is_computing_title or not self.root):
-                return self.module_answers.task.title
+            if item == "title" and self.module_answers.task != self.render_options.is_computing_title_for:
+                return self.data_cache.get_task_info(self.module_answers.task)['title']
             if item == "task_link":
-                return self.module_answers.task.get_absolute_url()
+                return self.data_cache.get_task_info(self.module_answers.task)['url']
             if item == "project":
-                if self.parent_context is not None: # use parent's cache
-                    return self.parent_context[item]
                 return RenderedProject(self.module_answers.task.project, parent_context=self)
             if item == "organization":
-                if self.parent_context is not None: # use parent's cache
-                    return self.parent_context[item]
                 return RenderedOrganization(self.module_answers.task, parent_context=self)
             if item in ("is_started", "is_finished"):
                 # These are methods on the Task instance. Don't
@@ -1144,17 +1147,23 @@ class TemplateContext(Mapping):
                 return (lambda : False) # the attribute normally returns a bound function
 
         # The 'questions' key returns (question, answer) pairs.
+        # Since template context variables may be evaluated prior to
+        # use, create a class that lazy-loads the results.
         if item == "questions":
             if self.module_answers is None:
                 return []
-            self.module_answers.as_dict() # trigger lazy-loading
-            ret = []
-            for question, is_answered, answerobj, answervalue in self.module_answers.answertuples.values():
-                ret.append((
-                    question.spec,
-                    RenderedAnswer(self.module_answers.task, question, is_answered, answerobj, answervalue, self)
-                ))
-            return ret
+            class LazyAnswers:
+                def __init__(self, template_context):
+                    self.template_context = template_context
+                def __iter__(self):
+                    answertuples = self.data_cache.get_task_answers(self.module_answers.task).answertuples
+                    for question, is_answered, answerobj, answervalue in answertuples.values():
+                        yield (
+                            question.spec,
+                            RenderedAnswer(self.module_answers.task, question, is_answered, answerobj, answervalue, self)
+                        )
+                    return ret
+            return LazyAnswers(self)
 
         # The output_documents key returns the output documents as a dict-like mapping
         # from IDs to rendered content.
@@ -1164,24 +1173,23 @@ class TemplateContext(Mapping):
         # The item is not something found in the context.
         error_message = "'{item}' is not a question or property of '{object}'."
         error_message_vars = { "item": item, "object": (self.module_answers.task.title if self.module_answers and self.module_answers.task else self.module_answers.module.spec["title"]) }
-        if self.errorfunc:
-            return UndefinedReference(item, self.errorfunc, self.source + ["(" + error_message_vars["object"] + ")"])
+        if self.render_options.errorfunc:
+            return UndefinedReference(item, self.render_options.errorfunc, self.render_options.source + ["(" + error_message_vars["object"] + ")"])
         raise AttributeError(error_message.format(**error_message_vars))
 
     def __iter__(self):
-        self._execute_lazy_module_answers()
-
         seen_keys = set()
 
         # question names
-        for q in self._module_questions.values():
-            seen_keys.add(q.key)
-            yield q.key
+        if self.module_answers is None:
+            for q in self.data_cache.get_module_questions(self.module_answers.module):
+                seen_keys.add(q.key)
+                yield q.key
 
         # special values
         if self.module_answers and self.module_answers.task:
             # Attributes that are only available if there is a task.
-            if not self.is_computing_title or not self.root:
+            if self.module_answers.task != self.render_options.is_computing_title_for:
                 # 'title' isn't available if we're in the process of
                 # computing it
                 yield "title"
@@ -1197,7 +1205,6 @@ class TemplateContext(Mapping):
     def __len__(self):
         return len([x for x in self])
 
-
     # Class that lazy-renders output documents on request.
     class LazyOutputDocuments:
         def __init__(self, context):
@@ -1210,7 +1217,8 @@ class TemplateContext(Mapping):
                         # Render it.
                         content = render_content(doc, self.context.module_answers, "html",
                             "'%s' output document '%s'" % (repr(self.context.module_answers.module), item),
-                            {}, show_answer_metadata=self.context.show_answer_metadata)
+                            {}, show_answer_metadata=self.context.render_options.show_answer_metadata,
+                            data_cache=self.context.data_cache)
 
                         # Mark it as safe.
                         from jinja2 import Markup
@@ -1235,20 +1243,19 @@ class RenderedProject(TemplateContext):
         self.project = project
         def _lazy_load():
             if self.project.root_task:
-                return self.project.root_task.get_answers()
-        super().__init__(_lazy_load, parent_context.escapefunc, parent_context=parent_context)
-        self.source = self.source + ["project variable"]
+                return self.data_cache.get_task_answers(self.project.root_task)
+        super().__init__(_lazy_load, parent_context.render_options, parent_context.data_cache)
     def __str__(self):
         return "<TemplateContext for %s - %s>" % (self.project, self.module_answers)
 
     def as_raw_value(self):
-        if self.is_computing_title:
+        if self.render_options.is_computing_title_for == self.project.root_task:
             # When we're computing the title for "instance-name", prevent
             # infinite recursion.
             return self.project.root_task.module.spec['title']
         return self.project.title
     def __html__(self):
-        return self.escapefunc(None, None, None, None, self.as_raw_value())
+        return self.render_options.escapefunc(None, None, None, None, self.as_raw_value())
 
 class RenderedOrganization(TemplateContext):
     def __init__(self, task, parent_context=None):
@@ -1256,9 +1263,8 @@ class RenderedOrganization(TemplateContext):
         def _lazy_load():
             project = self.organization.get_organization_project()
             if project.root_task:
-                return project.root_task.get_answers()
-        super().__init__(_lazy_load, parent_context.escapefunc, parent_context=parent_context)
-        self.source = self.source + ["organization variable"]
+                return self.data_cache.get_task_answers(project.root_task)
+        super().__init__(_lazy_load, parent_context.render_options, parent_context.data_cache)
 
     @property
     def organization(self):
@@ -1272,19 +1278,17 @@ class RenderedOrganization(TemplateContext):
     def as_raw_value(self):
         return self.organization.name
     def __html__(self):
-        return self.escapefunc(None, None, None, None, self.as_raw_value())
+        return self.render_options.escapefunc(None, None, None, None, self.as_raw_value())
 
 class RenderedAnswer:
-    def __init__(self, task, question, is_answered, answerobj, answer, parent_context):
+    def __init__(self, task, question, is_answered, answerobj, answer, template_context):
         self.task = task
         self.question = question
         self.is_answered = is_answered
         self.answerobj = answerobj
         self.answer = answer
-        self.parent_context = parent_context
-        self.escapefunc = parent_context.escapefunc
+        self.template_context = template_context
         self.question_type = self.question.spec["type"]
-        self.cached_tc = None
 
     def __html__(self):
         # This method name is a Jinja2 convention. See http://jinja.pocoo.org/docs/2.10/api/#jinja2.Markup.
@@ -1295,7 +1299,7 @@ class RenderedAnswer:
 
         if self.answer is None:
             # Render a non-answer answer.
-            if self.parent_context.is_computing_title:
+            if self.template_context.render_options.is_computing_title_for is not None:
                 # When computing an instance-name title,
                 # raise an exception (caught higher up) if
                 # an unanswered question is rendered.
@@ -1321,13 +1325,13 @@ class RenderedAnswer:
             ans = self.answer # ModuleAnswers or list of ModuleAnswers
             if self.question_type == "module": ans = [ans] # make it a lsit
             def get_title(task):
-                if self.parent_context.is_computing_title:
+                if task == self.template_context.render_options.is_computing_title_for:
                     # When we're computing the title for "instance-name", prevent
                     # infinite recursion.
                     return task.module.spec['title']
                 else:
                     # Get the computed title.
-                    return task.title
+                    return self.template_context.data_cache.get_task_info(task)['title']
             value = ", ".join(get_title(a.task) for a in ans)
 
         else:
@@ -1335,13 +1339,13 @@ class RenderedAnswer:
             value = str(self.answer)
 
         # And in all cases, escape the result.
-        return self.escapefunc(self.question, self.task, self.answer is not None, self.answerobj, value)
+        return self.template_context.render_options.escapefunc(self.question, self.task, self.answer is not None, self.answerobj, value)
 
     @property
     def text(self):
         # How the template renders {{q0.text}} to get a nice display form of the answer.
         if self.answer is None:
-            if self.parent_context.is_computing_title:
+            if self.template_context.render_options.is_computing_title_for is not None:
                 # When computing an instance-name title,
                 # raise an exception (caught higher up) if
                 # an unanswered question is rendered.
@@ -1395,7 +1399,7 @@ class RenderedAnswer:
                 self.value = value
                 self.ra = ra
             def __html__(self):
-                return self.ra.escapefunc(self.ra.question, self.ra.task, self.ra.answer is not None, self.ra.answerobj, self.value)
+                return self.ra.template_context.render_options.escapefunc(self.ra.question, self.ra.task, self.ra.answer is not None, self.ra.answerobj, self.value)
         return SafeString(value, self)
 
     @property
@@ -1520,14 +1524,12 @@ class RenderedAnswer:
                         }),
                     self.is_answered,
                     self.answerobj,
-                    ans, self.parent_context)
+                    ans, self.template_context)
                 for ans in self.answer)
         
         elif self.question_type == "module-set":
             # Iterate over the sub-tasks' answers. Load each's answers + imputed answers.
-            return (TemplateContext(
-                v.with_extended_info(parent_context=self.parent_context if not v.task or not self.task or v.task.project_id==self.task.project_id else None),
-                self.escapefunc, parent_context=self.parent_context)
+            return (TemplateContext(v, self.template_context.render_options, self.template_context.data_cache)
                 for v in self.answer)
 
         raise TypeError("Answer of type %s is not iterable." % self.question_type)
@@ -1547,12 +1549,7 @@ class RenderedAnswer:
             if self.answer is not None:
                 # If the question was not skipped, then we have the ModuleAnswers for it.
                 # Load its answers + evaluate impute conditions.
-                if not self.cached_tc:
-                    self.cached_tc = TemplateContext(
-                        lambda : self.answer.with_extended_info(parent_context=self.parent_context if not self.answer.task or not self.task or self.answer.task.project_id==self.task.project_id else None),
-                        self.escapefunc,
-                        parent_context=self.parent_context)
-                tc = self.cached_tc
+                tc = TemplateContext(self.answer, self.template_context.render_options, self.template_context.data_cache)
             else:
                 # The question was skipped -- i.e. we have no ModuleAnswers for
                 # the question that this RenderedAnswer represents. But we want
@@ -1564,7 +1561,7 @@ class RenderedAnswer:
                     ans = ModuleAnswers(self.question.answer_type_module, None, None)
                 else:
                     ans = None
-                tc = TemplateContext(ans, self.escapefunc, parent_context=self.parent_context)
+                tc = TemplateContext(ans, self.template_context.render_options, self.template_context.data_cache)
             return tc[item]
 
         # For the "raw" question type, the answer value is any

@@ -145,10 +145,6 @@ def task_view(view_func):
         if request.method == "GET" and taskslug != task.get_slug() and len(args) == 0:
             return HttpResponseRedirect(task.get_absolute_url() + pagepath + question_key)
 
-        # Load the answers the user has saved so far, and fetch imputed
-        # answers and next-question info.
-        answered = task.get_answers().with_extended_info()
-
         # Common context variables.
         context = {
             "DEBUG": settings.DEBUG,
@@ -166,15 +162,16 @@ def task_view(view_func):
         }
 
         # Render the view.
-        return view_func(request, task, answered, context, question, *args)
+        return view_func(request, task, context, question, *args)
     return new_view_func
 
 @task_view
-def next_question(request, task, answered, *unused_args):
+def next_question(request, task, *unused_args):
     import urllib.parse
     previous = ("?" + urllib.parse.urlencode({ "previous": request.GET["previous"]})) \
         if "previous" in request.GET else ""
 
+    answered = task.get_answers().with_extended_info()
     if len(answered.can_answer) == 0:
         # There is no next question. Redirect to the module finished page.
         return HttpResponseRedirect(task.get_absolute_url() + "/finished" + previous)
@@ -185,7 +182,7 @@ def next_question(request, task, answered, *unused_args):
         return HttpResponseRedirect(task.get_absolute_url_to_question(q) + previous)
 
 @task_view
-def save_answer(request, task, answered, context, __):
+def save_answer(request, task, context, __):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
 
@@ -376,7 +373,7 @@ def save_answer(request, task, answered, context, __):
     return response
 
 @task_view
-def show_question(request, task, answered, context, q):
+def show_question(request, task, context, q):
     # Let's talk about where the data is for this question. The 'q'
     # argument is a ModuleQuestion instance. The YAML data associated
     # with this question (like id, type, prompt, etc.) are stored in
@@ -411,6 +408,8 @@ def show_question(request, task, answered, context, q):
     authoring_tool_enabled = task.module.is_authoring_tool_enabled(request.user)
     can_upgrade_app = task.module.app.has_upgrade_priv(request.user)
 
+    template_rendering_data_cache = module_logic.TemplateEvaluationDataCache()
+    answered = task.get_answers().with_extended_info(data_cache=template_rendering_data_cache)
     is_answerable = (((q not in answered.unanswered) or (q in answered.can_answer)) and (q.key not in answered.was_imputed))
     # TODO Create Guidedmodules settings model set in database whether to display_non_answerable
     # to allow allow access to imputed questions/
@@ -505,6 +504,7 @@ def show_question(request, task, answered, context, q):
                 answered,
                 output_format,
                 reference,
+                data_cache=template_rendering_data_cache,
                 **kwargs
             )
         except Exception as e:
@@ -535,8 +535,10 @@ def show_question(request, task, answered, context, q):
     # and providing a download link.
     answer_rendered = None
     if taskq and taskq.question.spec["type"] == "file" and answer:
-        from .module_logic import TemplateContext, RenderedAnswer, HtmlAnswerRenderer
-        tc = TemplateContext(answered, HtmlAnswerRenderer(show_metadata=False))
+        from .module_logic import TemplateReneringOptions, TemplateContext, RenderedAnswer, HtmlAnswerRenderer
+        render_options = TemplateReneringOptions()
+        render_options.escapefunc = HtmlAnswerRenderer(show_metadata=False)
+        tc = TemplateContext(answered, render_options)
         ra = RenderedAnswer(task, taskq.question, True, answer, existing_answer, tc)
         answer_rendered = ra.__html__()
 
@@ -571,7 +573,7 @@ def show_question(request, task, answered, context, q):
     ###############################################################################
     # Pre-load the answers to project root task questions and impute answers so
     # that we know which questions are suppressed by imputed values.
-    root_task_answers = task.project.root_task.get_answers().with_extended_info()
+    root_task_answers = task.project.root_task.get_answers().with_extended_info(data_cache=template_rendering_data_cache)
     task_progress_project_list = []
     # current_mq_group = ""
     current_group = None
@@ -785,7 +787,7 @@ def show_question(request, task, answered, context, q):
     return render(request, "question.html", context)
 
 @task_view
-def task_finished(request, task, answered, context, *unused_args):
+def task_finished(request, task, context, *unused_args):
     # All of the questions in this task have been answered. Review the
     # answers and show the task's output documents.
 
@@ -965,7 +967,9 @@ def task_finished(request, task, answered, context, *unused_args):
     # Construct the page.
 
     top_of_page_output = None
-    outputs = task.render_output_documents(answered)
+    template_rendering_data_cache = module_logic.TemplateEvaluationDataCache()
+    answered = task.get_answers().with_extended_info(data_cache=template_rendering_data_cache)
+    outputs = task.render_output_documents(answered, data_cache=template_rendering_data_cache)
     for i, output in enumerate(outputs):
         if output.get("display") == "top":
             top_of_page_output = output
@@ -996,7 +1000,7 @@ def task_finished(request, task, answered, context, *unused_args):
     return render(request, "task-finished.html", context)
 
 @task_view
-def download_answer_file(request, task, answered, context, q, history_id):
+def download_answer_file(request, task, context, q, history_id):
     # Get the TaskAnswerHistory object referenced in the URL.
     tah = get_object_or_404(TaskAnswerHistory, id=history_id, taskanswer__task=task, taskanswer__question=q)
 
@@ -1046,9 +1050,10 @@ def download_answer_file(request, task, answered, context, q, history_id):
     return resp
 
 @task_view
-def download_module_output(request, task, answered, context, question, document_id, download_format):
+def download_module_output(request, task, context, question, document_id, download_format):
     if document_id in (None, ""):
         raise Http404()
+    answered = task.get_answers().with_extended_info()
     try:
         blob, filename, mime_type= task.download_output_document(document_id, download_format, answers=answered)
     except ValueError:

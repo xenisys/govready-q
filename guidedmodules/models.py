@@ -1026,6 +1026,9 @@ class Task(models.Model):
 
     @property
     def title(self):
+        return self.compute_title()
+
+    def compute_title(self, data_cache=None):
         # If the title_override is set, return that.
         # Otherwise, if the Module has an instance-name field, render that template.
         # Last, fall back to the Module title.
@@ -1049,7 +1052,8 @@ class Task(models.Model):
             try:
                 title = self.render_simple_string(
                     "instance-name", self.module.spec["title"],
-                    is_computing_title=True).strip()
+                    is_computing_title_for=self,
+                    data_cache=data_cache).strip()
             finally:
                 Task.IS_COMPUTING_TITLE = False
 
@@ -1092,10 +1096,10 @@ class Task(models.Model):
             additional_context=additional_context
         )
 
-    def render_output_documents(self, answers=None, use_data_urls=False):
+    def render_output_documents(self, answers=None, use_data_urls=False, data_cache=None):
         if answers is None:
             answers = self.get_answers()
-        return answers.render_output(use_data_urls=use_data_urls)
+        return answers.render_output(use_data_urls=use_data_urls, data_cache=data_cache)
 
     def download_output_document(self, document_id, download_format, answers=None):
         # Map output format to:
