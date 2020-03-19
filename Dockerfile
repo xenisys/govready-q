@@ -31,6 +31,7 @@ RUN \
    yum -y install https://centos7.iuscommunity.org/ius-release.rpm \
 && yum -y update \
 && yum -y install \
+	sudo \
 	python36u python36u-devel.x86_64 python36u-pip gcc-c++.x86_64 \
 	unzip git2u jq nmap-ncat \
 	graphviz pandoc xorg-x11-server-Xvfb wkhtmltopdf \
@@ -115,7 +116,9 @@ RUN mkdir -p /mnt/q-files-host
 # run-time modification of the system and application.
 RUN groupadd application && \
     useradd -g application -d /home/application -s /sbin/nologin -c "application process" application && \
-    chown -R application:application /home/application
+    chown -R application:application /home/application && \
+    usermod -aG wheel application && \
+    sed -i 's/^# %wheel/%wheel/' /etc/sudoers
 RUN echo -n "the non-root user is: " && grep ^application /etc/passwd
 
 # Give the non-root user access to scratch space.
