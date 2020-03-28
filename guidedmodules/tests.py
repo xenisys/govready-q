@@ -52,7 +52,7 @@ class ImputeConditionTests(TestCaseWithFixtureData):
         # the provided module and with a single question answered.
         m = self.getModule(module)
         answers = ModuleAnswers(m, None, { question_key: (m.questions.get(key=question_key), True, None, question_value) })
-        render_options = TemplateReneringOptions()
+        render_options = TemplateRenderingOptions()
         render_options.escapefunc = lambda question, task, is_answered, answerobj, value : str(value)
         context = TemplateContext(answers, render_options)
 
@@ -647,7 +647,7 @@ class RenderTests(TestCaseWithFixtureData):
         # Test that we get the same thing if we use an impute condition with `value-mode: expression`
         # or, if template is provided, `value-mode: template`. For `value-mode: expression`, convert
         # the imputed value to a string since the test is only given its string form.
-        render_options = TemplateReneringOptions()
+        render_options = TemplateRenderingOptions()
         render_options.escapefunc = lambda question, task, is_answered, answerobj, value : value
         context = TemplateContext(answers, render_options) # parallels evaluate_module_state
         if not template:

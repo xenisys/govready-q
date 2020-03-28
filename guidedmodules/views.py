@@ -535,8 +535,8 @@ def show_question(request, task, context, q):
     # and providing a download link.
     answer_rendered = None
     if taskq and taskq.question.spec["type"] == "file" and answer:
-        from .module_logic import TemplateReneringOptions, TemplateContext, RenderedAnswer, HtmlAnswerRenderer
-        render_options = TemplateReneringOptions()
+        from .module_logic import TemplateRenderingOptions, TemplateContext, RenderedAnswer, HtmlAnswerRenderer
+        render_options = TemplateRenderingOptions()
         render_options.escapefunc = HtmlAnswerRenderer(show_metadata=False)
         tc = TemplateContext(answered, render_options)
         ra = RenderedAnswer(task, taskq.question, True, answer, existing_answer, tc)
