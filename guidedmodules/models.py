@@ -74,14 +74,19 @@ class AppSource(models.Model):
 
     def get_available_apps(self):
         # TODO need to include already loaded apps
-        with self.open() as src:
-            for app in src.list_apps():
-                yield {
-                    "name": app.name,
-                    "new_version_number": app.get_new_version_number(),
-                    "versions_in_catalog": app.get_appversions(),
-                    "hidden_versions": app.get_hidden_appversions(),
-                }
+        try:
+            with self.open() as src:
+                for app in src.list_apps():
+                    yield {
+                        "name": app.name,
+                        "new_version_number": app.get_new_version_number(),
+                        "versions_in_catalog": app.get_appversions(),
+                        "hidden_versions": app.get_hidden_appversions(),
+                    }
+        except:
+            # If we cannot get any apps, return nothing so Admin page will not
+            # try and render widget displaying available apps
+            return
 
     def add_app_to_catalog(self, appname):
         from .app_loading import load_app_into_database
@@ -556,6 +561,10 @@ class ModuleQuestion(models.Model):
         if self.spec["type"] == "multiple-choice":
             import json
             return "An array containing " + ", ".join(json.dumps(choice['key']) for choice in self.spec["choices"]) + "."
+        if self.spec["type"] == "datagrid":
+            # import json
+            # return "An array containing " + ", ".join(json.dumps(field['key']) for field in self.spec["fields"]) + "."
+            return "datagrid self.spec"
         return ""
 
 class Task(models.Model):
@@ -1925,10 +1934,16 @@ class TaskAnswerHistory(models.Model):
         # instance, an array of instances, that will lazy-load the answers
         # when needed.
         if q.spec["type"] in ("module", "module-set"):
-            value = [
-                ModuleAnswers(t.module, t, None)
-                for t in self.answered_by_task.all()
+            if self.id is not None:
+                # this is in the database
+                value = [
+                    ModuleAnswers(t.module, t, None)
+                    for t in self.answered_by_task.all()
                 ]
+            else:
+                # this is _not_ in the database, and the answer is stored_value
+                # see Task.build_answers() regarding imputed answers
+                return self.stored_value
             if q.spec["type"] == "module":
                 if len(value) == 0:
                     # The question is skipped.
@@ -2037,7 +2052,7 @@ class TaskAnswerHistory(models.Model):
                 "thumbnail_url": thumbnail_url,
                 "thumbnail_dataurl": thumbnail_dataurl,
             }
-        
+
         # For all other question types, the value is stored in the stored_value
         # field.
         else:
@@ -2127,6 +2142,14 @@ class TaskAnswerHistory(models.Model):
                     human_readable_text = choices.get(value)
                 elif q.spec["type"] == "multiple-choice":
                     human_readable_text = [choices.get(v) for v in value]
+
+            elif q.spec["type"] in ("datagrid"):
+                # Get the 'text' values for the choices.
+                human_readable_text_key = "text"
+                fields = { c["key"]: c["text"] for c in q.spec["fields"] }
+                if q.spec["type"] == "datagrid":
+                    # human_readable_text = [fields.get(v) for v in value]
+                    human_readable_text = "datagrid_fix human_readable_text"
 
             elif q.spec["type"] == "yesno":
                 human_readable_text_key = "text"

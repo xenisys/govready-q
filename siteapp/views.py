@@ -34,6 +34,15 @@ def homepage(request):
     from .views_landing import homepage
     return homepage(request)
 
+def debug(request):
+    # Raise Exception to see session information
+    raise Exception()
+    if request.user.is_authenticated:
+        return HttpResponseRedirect("/projects")
+
+    from .views_landing import homepage
+    return homepage(request)
+
 def assign_project_lifecycle_stage(projects):
     # Define lifecycle stages.
     # Because we alter this data structure in project_list,
@@ -889,6 +898,7 @@ def project_api(request, project):
             if q.spec["type"] == "choice": add_filter_field(q, "html", "Human-readable value")
             if q.spec["type"] == "yesno": add_filter_field(q, "html", "Human-readable value ('Yes' or 'No')")
             if q.spec["type"] == "multiple-choice": add_filter_field(q, "html", "Comma-separated human-readable value")
+            if q.spec["type"] == "datagrid": add_filter_field(q, "html", "Array of dictionaries for Datagrid")
 
         # Document the fields of the sub-modules together.
         for q, a in items:
@@ -1105,32 +1115,6 @@ def project_start_apps(request, *args):
                 return JsonResponse({ "status": "error", "message": message })
 
     return viewfunc(request, *args)
-
-@project_read_required
-def project_upgrade_app(request, project):
-    # Upgrade the AppVersion that the project is linked to. The
-    # AppVersion is updated in place, so this updates all projects
-    # using the AppVersion. The work is done in guidedmodules.views.upgrade_app.
-
-    # Get the app's catalog information just for display purposes.
-    # We're not using the catalog to fetch newer app info - just to
-    # show the page title etc.
-    error = False
-    for app in get_compliance_apps_catalog_for_user(request.user):
-        if app['appsource_id'] == project.root_task.module.app.source.id:
-            if app['key'].endswith("/" + project.root_task.module.app.appname):
-                break
-    else:
-        error = "App cannot be upgraded because it is no longer in the compliance apps catalog."
-
-    # Show information about the app.
-    return render(request, "project-upgrade-app.html", {
-        "page_title": "Upgrade App",
-        "project": project,
-        "can_upgrade_app": project.root_task.module.app.has_upgrade_priv(request.user),
-        "error": error,
-        "app": app,
-    })
 
 # PORTFOLIOS
 
@@ -1618,3 +1602,10 @@ def shared_static_pages(request, page):
         "password_hash_method": password_hash_method,
         "project_form": ProjectForm(request.user),
     })
+
+# SINGLE SIGN ON
+
+def sso_logout(request):
+    output = "You are logged out."
+    html = "<html><body><pre>{}</pre></body></html>".format(output)
+    return HttpResponse(html)

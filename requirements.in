@@ -17,9 +17,12 @@ GitPython # BSD License
 Pygments==2.2.0 # BSD License
 termcolor # MIT License
 xxhash # BSD License
+importlib-metadata<2,>=0.12 # Apache License
+importlib-resources<2,>=1.0 # Apache License
+
 
 # Common Django Packages
-Django<2.2.5 # BSD License
+Django<2.2.11 # BSD License
 django-debug-toolbar # BSD License
 django-allauth # MIT License
 django-bootstrap3 # Apache License 2.0
@@ -40,6 +43,8 @@ commonmarkextensions # BSD 3
 
 # Only needed in common production deployment configurations
 uwsgi # GPL2
+gunicorn # MIT License
+gevent # MIT License
 psycopg2-binary # LGPL
 rfc5424-logging-handler # BSD License
 
