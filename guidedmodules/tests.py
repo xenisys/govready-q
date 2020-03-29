@@ -54,7 +54,7 @@ class ImputeConditionTests(TestCaseWithFixtureData):
         answers = ModuleAnswers(m, None, { question_key: (m.questions.get(key=question_key), True, None, question_value) })
         render_options = TemplateRenderingOptions()
         render_options.escapefunc = lambda question, task, is_answered, answerobj, value : str(value)
-        context = TemplateContext(answers, render_options)
+        context = TemplateContext(answers, render_options, TemplateEvaluationDataCache())
 
         # Build the impute condition.
         impute_condition = { }
@@ -649,7 +649,7 @@ class RenderTests(TestCaseWithFixtureData):
         # the imputed value to a string since the test is only given its string form.
         render_options = TemplateRenderingOptions()
         render_options.escapefunc = lambda question, task, is_answered, answerobj, value : value
-        context = TemplateContext(answers, render_options) # parallels evaluate_module_state
+        context = TemplateContext(answers, render_options, TemplateEvaluationDataCache()) # parallels evaluate_module_state
         if not template:
             impute_condition = { "value": expression, "value-mode": "expression" }
         else:
