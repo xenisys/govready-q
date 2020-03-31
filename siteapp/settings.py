@@ -64,6 +64,7 @@ SITE_ID = 1
 
 # Add standard apps to INSTALLED_APPS.
 INSTALLED_APPS = [
+	"scout_apm.django",  # should be listed first # DEBUG
 	'django.contrib.admin',
 	'django.contrib.auth',
 	'django.contrib.contenttypes',
@@ -80,6 +81,11 @@ INSTALLED_APPS = [
 	# add any allauth social providers as you like
 ]
 
+# DEBUG
+# Scout settings
+SCOUT_MONITOR = True
+SCOUT_KEY = "QmDxfB118EDhaxeHPyka"
+SCOUT_NAME = "GovReady-Q-ge1"
 # Add test_without_migrations if it is installed. This provides --nomigrations
 # to the test management command.
 try:

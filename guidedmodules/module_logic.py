@@ -93,6 +93,10 @@ def walk_module_questions(module, callback):
 
 
 def evaluate_module_state(current_answers, parent_context=None):
+    # DEBUG
+    # from pyinstrument import Profiler
+    # profiler = Profiler()
+    # profiler.start()
     # Compute the next question to ask the user, given the user's
     # answers to questions so far, and all imputed answers up to
     # that point.
@@ -210,6 +214,9 @@ def evaluate_module_state(current_answers, parent_context=None):
     ret.was_imputed = was_imputed
     ret.unanswered = unanswered
     ret.can_answer = can_answer
+    # DEBUG
+    # profiler.stop()
+    # print(profiler.output_text(unicode=True, color=True))
     return ret
 
 

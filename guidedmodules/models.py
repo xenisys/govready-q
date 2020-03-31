@@ -14,6 +14,12 @@ from guardian.shortcuts import (assign_perm, get_objects_for_user,
                                 get_perms_for_model, get_user_perms,
                                 get_users_with_perms, remove_perm)
 
+# DEBUG
+debug_counts = {
+    "get_all_current_answer_records": 0,
+    "for task in tasks": 0,
+    "for question in questions": 0
+}
 
 class AppSource(models.Model):
     is_system_source = models.BooleanField(default=False, help_text="This field is set to True for a single AppSource that holds the system modules such as user profiles.")
@@ -653,6 +659,8 @@ class Task(models.Model):
 
     @staticmethod
     def get_all_current_answer_records(tasks):
+        global debug_counts
+        debug_counts["get_all_current_answer_records"] += 1 # DEBUG
         # Efficiently get the current answer to every question of each of the tasks.
         #
         # Since we track the history of answers to each question, we need to get the most
@@ -681,7 +689,9 @@ class Task(models.Model):
 
         # Iterate over the tasks and their questions in order...
         for task in tasks:
+            debug_counts["for task in tasks"] += 1 # DEBUG
             for question in questions:
+                debug_counts["for question in questions"] += 1 # DEBUG
                 # Skip if this question is not for this task.
                 if question.module != task.module: continue
 
@@ -693,8 +703,10 @@ class Task(models.Model):
                 if answer and answer.cleared:
                     answer = None
 
+                # DEBUG
                 # Yield.
                 yield (task, question, answer)
+        print("debug_counts: ", debug_counts)
 
     def get_current_answer_records(self):
         for task, question, answer in \
@@ -740,6 +752,8 @@ class Task(models.Model):
             self.save(update_fields=["cached_state"])
 
         # Return cached value.
+        # DEBUG
+        print("self.cached_state: {}".format(self.cached_state))
         return self.cached_state[key]
 
     def is_started(self):
@@ -747,6 +761,10 @@ class Task(models.Model):
 
     def is_finished(self):
         def compute_is_finished():
+            # DEBUG
+            from pyinstrument import Profiler
+            profiler = Profiler()
+            profiler.start()
             # Check that all questions that need an answer have
             # an answer and that all module-type questions are
             # finished.
@@ -772,6 +790,9 @@ class Task(models.Model):
                             if not item.task.is_finished():
                                 return False
             return True
+            # DEBUG
+            profiler.stop()
+            print(profiler.output_text(unicode=True, color=True))
         return self._get_cached_state("is_finished", compute_is_finished)
 
     def get_progress_percent(self):
