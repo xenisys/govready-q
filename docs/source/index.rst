@@ -19,7 +19,7 @@ The code is open source, and [available on GitHub](https://github.com/GovReady/g
    :caption: Contents:
 
    introduction
-   Deploy.rst
+   deploy/Deploy.rst
    Environment
    Permissions
    Authoring
