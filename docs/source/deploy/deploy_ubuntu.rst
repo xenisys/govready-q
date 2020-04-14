@@ -1,81 +1,74 @@
 Deploying on Ubuntu
 ===================
 
-Quickstart
-----------
+Instructions provide basic guidance on setting up GovReady-Q on an Ubuntu 16.04 server with Nginx. These commands should be run from the root directory of the GovReady-Q code repository.
 
-.. container:: content-tabs
+Preparing Ubuntu
+-----------------
 
-::
+GovReady-Q calls requires Python 3.6 or higher to run and several Linux packages to provide full functionality.
 
-   .. tab-container:: ubuntu
-       :title: Ubuntu 16.04
+.. code-block:: bash
 
-       .. rubric:: Installing on Ubuntu
-       
-       Instructions provide basic guidance on setting up GovReady-Q on an Ubuntu 16.04 server with Nginx. These commands should be run from the root directory of the GovReady-Q code repository.
+   # upgrade apt-get
+   apt-get update && apt-get upgrade -y
 
-       GovReady-Q calls requires Python 3.6 or higher to run and several Linux packages to provide full functionality.
+   # install dependencies
+   apt-get install -y \
+     unzip \
+     python3 python-virtualenvpython3-pip \
+     python3-yaml \
+     nginx uwsgi-plugin-python3supervisor \
+     memcached \
+     graphviz
 
-       .. code-block:: bash
+   # optional install gcc to build the uWSGI Python package.
+   sudo yum install gcc
 
-           # upgrade apt-get
-           apt-get update && apt-get upgrade -y
+   # optional insall of postgress and/or mysql
+   apt-get install -y postgresql mysql-devel
 
-           # install dependencies
-           apt-get install -y \
-             unzip \
-             python3 python-virtualenvpython3-pip \
-             python3-yaml \
-             nginx uwsgi-plugin-python3supervisor \
-             memcached \
-             graphviz
+Installing GovReady-Q
+---------------------
 
-           # optional install gcc to build the uWSGI Python package.
-           sudo yum install gcc
+Clone GovReady-Q source code and install.
 
-           # optional insall of postgress and/or mysql
-           apt-get install -y postgresql mysql-devel
+.. code-block:: bash
 
-       .. rubric:: Installing GovReady-Q
-       
-       Clone GovReady-Q source code and install.
+   # clone GovReady-Q
+   git clone https://github.com/govready/govready-q
+   cd govready-q
 
-       .. code-block:: bash
+   # install Python 3 packages
+   pip3 install --user -r requirements.txt
 
-           # clone GovReady-Q
-           git clone https://github.com/govready/govready-q
-           cd govready-q
+   # install Bootstrap and other vendor resources locally
+   ./fetch-vendor-resources.sh
 
-           # install Python 3 packages
-           pip3 install --user -r requirements.txt
+Run the final setup commands to initialize a local Sqlite3 database in `local/db.sqlite` to make sure everything is OK so far:
 
-           # install Bootstrap and other vendor resources locally
-           ./fetch-vendor-resources.sh
+.. code-block:: bash
 
-       Run the final setup commands to initialize a local Sqlite3 database in `local/db.sqlite` to make sure everything is OK so far:
+   # run database migrations (sqlite lite database used by default)
+   python3 manage.py migrate
 
-       .. code-block:: bash
+   # load a few critical modules
+   python3 manage.py load_modules
 
-           # run database migrations (sqlite lite database used by default)
-           python3 manage.py migrate
+   # create superuser with initial account
+   python3 manage.py first_run
 
-           # load a few critical modules
-           python3 manage.py load_modules
+Start GovReady-Q
+-----------------
 
-           # create superuser with initial account
-           python3 manage.py first_run
+.. code-block:: bash
 
-       .. rubric:: Start GovReady-Q
+   # run the server
+   python3 manage.py runserver
 
-       .. code-block:: bash
+Visit your GovReady-Q site in your web browser at:
 
-           # run the server
-           python3 manage.py runserver
-
-       Visit your GovReady-Q site in your web browser at:
-
-           http://localhost:8000/
+   http://localhost:8000/
 
 Additional Details
 ------------------

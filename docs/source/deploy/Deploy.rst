@@ -1,10 +1,11 @@
 Deploying GovReady-Q
 ====================
 
-.. toctree:: :maxdepth: 1
+.. toctree:: :maxdepth: 3
 
    requirements
    deploy_all
+   deploy_ubuntu.rst
    deploy_prod
    deploy_local_dev
    configure_db
