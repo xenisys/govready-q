@@ -141,6 +141,10 @@ bind = '0.0.0.0:8000'
 workers = multiprocessing.cpu_count() * 2 + 1
 worker_class = 'gevent'
 keepalive = 10
+ca_certs = '/etc/pki/root+intermediate.cer'
+keyfile = '/etc/pki/govready.key'
+certfile = '/etc/pki/govready.cer'
+ssl_version = 'TLSv1_2'
 EOF
 
 # Write a file that indicates to the host that Q

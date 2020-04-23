@@ -160,5 +160,10 @@ USER application
 # Test.
 RUN python3.6 manage.py check
 
+# Copy cert files
+COPY local/govready.cer /etc/pki/govready.cer
+COPY local/govready.key /etc/pki/govready.key
+COPY local/root+intermediate.cer /etc/pki/root+intermediate.cer
+
 # Set the startup script.
 CMD [ "bash", "dockerfile_exec.sh" ]
