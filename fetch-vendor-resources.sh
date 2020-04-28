@@ -49,11 +49,12 @@ mkdir -p $VENDOR
 
 # Fetch resources.
 
-# sqlite3 3.8.3 (Public Domain)
-# Django 2.2 requires SQLite 3.8.3 or later; on CentOS 7 an upgrade is needed
-# We borrow the package from Fedora Project, https://koji.fedoraproject.org/koji/packageinfo?packageID=485
+# CentOS 7 packages
 if command -v rpm > /dev/null 2>&1 ; then
   if test $(rpm --eval %{centos_ver}) = 7; then
+    # sqlite3 3.8.3 (Public Domain)
+    # Django 2.2 requires SQLite 3.8.3 or later; on CentOS 7 an upgrade is needed
+    # We borrow the package from Fedora Project, https://koji.fedoraproject.org/koji/packageinfo?packageID=485
     echo "Upgrading SQLite to 3.8.3"
     download \
       https://kojipkgs.fedoraproject.org/packages/sqlite/3.8.3/1.fc20/x86_64/sqlite-3.8.3-1.fc20.x86_64.rpm \
@@ -61,6 +62,15 @@ if command -v rpm > /dev/null 2>&1 ; then
       '4c976fc17e3676ce76aa71ce604be6d16cef36c73515e9bf1ebcdbdc6cc6e7d4'
     yum -y install /tmp/sqlite-3.8.3-1.fc20.x86_64.rpm
     rm -f /tmp/sqlite-3.8.3-1.fc20.x86_64.rpm
+
+    # libxslt-1.1.34-1 (MIT License)
+    # We need >1.1.3 to remediate CVE-2019-18197.
+    download \
+      ftp://xmlsoft.org/libxslt/libxslt-1.1.34-1.fc30.x86_64.rpm \
+      /tmp/libxslt-1.1.34-1.fc30.x86_64.rpm \
+      '5dd3df0285e1c3b111e82f08fc7ab5056dfbe618a171569e37d32887ad83a942'
+    yum -y install /tmp/libxslt-1.1.34-1.fc30.x86_64.rpm
+    rm -f /tmp/libxslt-1.1.34-1.fc30.x86_64.rpm
   fi
 fi
 
