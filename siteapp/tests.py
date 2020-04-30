@@ -59,7 +59,7 @@ class SeleniumTest(StaticLiveServerTestCase):
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         options = selenium.webdriver.ChromeOptions()
         if SeleniumTest.window_geometry == "maximized":
-            options.add_argument("start-maximized") # too small screens make clicking some things difficult
+            options.add_argument("--start-maximized") # too small screens make clicking some things difficult
         else:
             options.add_argument("--window-size=" + ",".join(str(dim) for dim in SeleniumTest.window_geometry))
         cls.browser = selenium.webdriver.Chrome(chrome_options=options)
