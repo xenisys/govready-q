@@ -58,8 +58,8 @@ class SeleniumTest(StaticLiveServerTestCase):
         import selenium.webdriver
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         options = selenium.webdriver.ChromeOptions()
-        if os.path.exists("/usr/bin/chromium-browser"):
-            options.binary_location = "/usr/bin/chromium-browser"
+        if os.path.exists("/usr/local/bin/chromedriver"):
+            options.binary_location = "/usr/local/bin/chromedriver"
         options.add_argument("disable-infobars") # "Chrome is being controlled by automated test software."
         if SeleniumTest.window_geometry == "maximized":
             options.add_argument("start-maximized") # too small screens make clicking some things difficult
