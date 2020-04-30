@@ -58,14 +58,6 @@ class SeleniumTest(StaticLiveServerTestCase):
         import selenium.webdriver
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         options = selenium.webdriver.ChromeOptions()
-        if os.path.exists("/usr/local/bin/chromedriver"):
-            options.binary_location = "/usr/local/bin/chromedriver"
-        options.add_argument("disable-infobars") # "Chrome is being controlled by automated test software."
-        if SeleniumTest.window_geometry == "maximized":
-            options.add_argument("start-maximized") # too small screens make clicking some things difficult
-        else:
-            options.add_argument("--window-size=" + ",".join(str(dim) for dim in SeleniumTest.window_geometry))
-        options.add_argument("--incognito")
         cls.browser = selenium.webdriver.Chrome(chrome_options=options)
         cls.browser.implicitly_wait(3) # seconds
 
